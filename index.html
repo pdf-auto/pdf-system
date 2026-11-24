@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF感想文一括入力</title>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{font-family:sans-serif;background:#f1f5f9;color:#172033;margin:0;padding:30px}
+main{max-width:900px;margin:auto;background:white;padding:30px;border-radius:16px}
+h1{font-size:26px}
+section{margin:24px 0}
+textarea{width:100%;height:260px;padding:15px;font-size:16px;border:1px solid #bbb;border-radius:8px}
+button{cursor:pointer;padding:10px 16px;border:0;border-radius:6px;background:#e2e8f0}
+#run{background:#166534;color:white;width:100%;font-size:18px;padding:16px}
+#drop{border:2px dashed #94a3b8;padding:30px;text-align:center;border-radius:10px}
+li{padding:8px;overflow-wrap:anywhere}
+li button{margin-left:6px}
+#status{white-space:pre-wrap}
+small{color:#64748b}
+</style>
+</head>
+<body>
+<main>
+<h1>PDF感想文一括入力</h1>
+<p>PDFと感想文を順番に対応させます。</p>
+<section>
+<h2>① PDFを追加</h2>
+<div id="drop">
+PDFをここにドラッグ＆ドロップ
+<br><br>
+<input id="files" type="file" accept=".pdf" multiple>
+</div>
+<ol id="list"></ol>
+<button id="clear">PDF一覧をクリア</button>
+</section>
+<section>
+<h2>② 感想文を貼り付け</h2>
+<p>感想文と感想文の間に空行を入れてください。</p>
+<textarea id="texts" placeholder="1人目の感想文
+
+2人目の感想文
+
+3人目の感想文"></textarea>
+<p id="count"></p>
+</section>
+<label>
+<input type="checkbox" id="confirm">
+本人が作成した文章であり、PDFの順番と空欄を確認しました。
+</label>
+<section>
+<button id="run">一括入力・ZIP保存</button>
+<p id="status"></p>
+</section>
+<small>様式第8-3号（R8.8）の同一レイアウト専用。原本は変更しません。完成後は必ず内容を確認してください。</small>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let files = [];
+function texts(){
+return $("texts").value.trim().split(/\n\s*\n/).map(t=>t.trim()).filter(Boolean);
+}
+function render(){
+$("list").replaceChildren();
+files.forEach((f,i)=>{
+const li=document.createElement("li");
+li.append(document.createTextNode(f.name+" "));
+[["↑",-1],["↓",1],["削除",0]].forEach(([label,d])=>{
+const b=document.createElement("button");
+b.textContent=label;
+b.onclick=()=>{
+if(d===0)files.splice(i,1);
+else if(files[i+d]){
+[files[i],files[i+d]]=[files[i+d],files[i]];
+}
+render();
+};
+li.append(b);
+});
+$("list").append(li);
+});
+$("count").textContent=`PDF：${files.length}枚 ／ 感想文：${texts().length}件`;
+$("confirm").checked=false;
+}
+function add(items){
+files.push(...Array.from(items).filter(f=>f.name.toLowerCase().endsWith(".pdf")));
+render();
+}
+$("files").onchange=e=>{add(e.target.files);e.target.value="";};
+$("drop").ondragover=e=>e.preventDefault();
+$("drop").ondrop=e=>{e.preventDefault();add(e.dataTransfer.files);};
+$("clear").onclick=()=>{files=[];render();};
+$("texts").oninput=render;
+function normalize(t){
+return t.normalize("NFKC").replace(/\s/g,"");
+}
+function makeImage(text,w,h){
+const c=document.createElement("canvas");
+c.width=Math.round(w*3);
+c.height=Math.round(h*3);
+const ctx=c.getContext("2d");
+ctx.scale(3,3);
+ctx.fillStyle="#000";
+ctx.textBaseline="top";
+for(let size=11;size>=7;size-=0.5){
+ctx.font=`${size}px "Yu Gothic", "Meiryo", sans-serif`;
+let lines=[];
+for(const paragraph of text.split("\n")){
+let line="";
+for(const ch of paragraph){
+if(ctx.measureText(line+ch).width>w-8 && line){
+lines.push(line);
+line=ch;
+}else line+=ch;
+}
+lines.push(line);
+}
+const lh=size*1.4;
+if(lines.length*lh<=h-8){
+lines.forEach((line,i)=>ctx.fillText(line,4,4+i*lh));
+return c.toDataURL("image/png");
+}
+}
+throw new Error("感想文が長すぎます。");
+}
+$("run").onclick=async()=>{
+const ts=texts();
+const status=$("status");
+if(!files.length||files.length!==ts.length){
+status.textContent="PDFと感想文の数を一致させてください。";
+return;
+}
+if(new Set(ts.map(normalize)).size!==ts.length){
+status.textContent="同じ感想文が含まれています。重複を確認してください。";
+return;
+}
+if(!$("confirm").checked){
+status.textContent="確認欄にチェックしてください。";
+return;
+}
+$("run").disabled=true;
+try{
+const zip=new JSZip();
+for(let i=0;i<files.length;i++){
+status.textContent=`処理中：${i+1}/${files.length}`;
+const doc=await PDFLib.PDFDocument.load(await files[i].arrayBuffer());
+if(doc.getPageCount()!==1)throw new Error("1ページのPDFのみ対応しています。");
+const p=doc.getPages()[0];
+const {width:w,height:h}=p.getSize();
+if(p.getRotation().angle!==0||Math.abs(w/h-0.5)>0.025){
+throw new Error("対応外のPDFサイズまたは向きです。");
+}
+const x=w*0.044;
+const top=h*0.416;
+const iw=w*0.895;
+const ih=h*0.175;
+const img=await doc.embedPng(makeImage(ts[i],iw,ih));
+p.drawImage(img,{x,y:h-top-ih,width:iw,height:ih});
+zip.file(`${String(i+1).padStart(3,"0")}_${files[i].name}`,await doc.save());
+}
+const blob=await zip.generateAsync({type:"blob"});
+const url=URL.createObjectURL(blob);
+const a=document.createElement("a");
+a.href=url;
+a.download="感想文入力済みPDF.zip";
+a.click();
+setTimeout(()=>URL.revokeObjectURL(url),60000);
+status.textContent="出力完了。全PDFの内容を確認してください。";
+}catch(e){
+status.textContent="処理中止："+e.message;
+}finally{
+$("run").disabled=false;
+}
+};
+render();
+</script>
+</body>
+</html>
